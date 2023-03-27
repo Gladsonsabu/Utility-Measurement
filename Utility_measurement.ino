@@ -20,8 +20,8 @@
 #define SCT_DET 17 
 #define YFS401 16  
 
-const char* ssid = "My sam S8";               // your network SSID (name) 
-const char* password = "agesldwaw1";          // your network password
+const char* ssid = "Alvin";               // your network SSID (name) 
+const char* password = "0568098725";          // your network password
 
 const float FACTOR = 50;
 const float multiplier = 0.0825F;             //0.2527F;//0.0625F
@@ -50,21 +50,28 @@ bool MassFlow_flag = 1;
 
 uint16_t LPG_STAT = 0;
 unsigned long MQ = 0;
-const unsigned long MQ_LIM = 0;
+const unsigned long MQ_LIM = 20000;
 
 unsigned long SDC_prev_time = 0;
 unsigned short SDC_update_time = 5000;
 unsigned int readingID = 0;
-String dataMessage;
+// String dataMessage;
+String SD_CONFIG_SSID = "";
+String SD_CONFIG_PWD = "";
+String SD_CONFIG_TSPKCHNUM = "";
+String SD_CONFIG_WAPI = "";
+String SD_CONFIG_RAPI = "";
 bool SD_flag = 1;
+static char charbuff[512];
 
 bool WIFI_flag = 1;
+long WIFI_CONN_Timeout = 0;
 
-unsigned long ChannelNumber = 2058553;                    // These parameters are for thingspeak details
-const char * WriteAPIKey = "YHSFZ0TC8CPU3W7W";
-const char * readAPIKey = "34W6LGLIFXD56MPM"; 
+unsigned long ChannelNumber = 2081108;                    // These parameters are for thingspeak details
+const char * WriteAPIKey = "I9RGBNTOC02L5PTO";
+const char * readAPIKey = "P3HI4H0E0UY0R86A"; 
 unsigned long TS_prev_time = 0;
-unsigned short TS_update_time = 15000;
+unsigned short TS_update_time = 20000;
 
 char Time[ ] = "TIME:00:00:00";                           // These parameters are for network time
 char Date[ ] = "DATE:00/00/2000";
@@ -76,7 +83,8 @@ const unsigned short int lcddelay= 2500;
 byte lcdstate = 5;
 bool sweepdir = 1;
 
-float AVG_ARR[4] = {0,0,0,0};
+int AVG_ARR_INT[4] = {0,0,0,0};
+float AVG_ARR_FLOAT[4] = {0,0,0,0};
 
 double Press_Diff(void);
 void pulseCounter(void);
@@ -88,6 +96,9 @@ void Tspk_Update(int);
 void Sensortest(void);
 void time_update(void);
 void SDClogger(void);
+void SDC_SYSconfig(void);
+void StageValues(void);
+void Paramupdate(char *, short);
 
 TaskHandle_t Task1;
 // TaskHandle_t Task2;
@@ -101,15 +112,30 @@ Adafruit_ADS1115 ADS;
 HX711 PGuage1;
 HX711 PGuage2;
 NTPClient timeClient(ntpUDP, "asia.pool.ntp.org", 19800, 60000);
-long WIFI_CONN_Timeout = 0;
+
+
 void setup() {
   Serial.begin(115200);
-  pinMode(SCT_DET,INPUT);  //Define the pin mode
-  pinMode(YFS401,INPUT);
   lcd.begin(16, 2);  // initialize the lcd
   lcd.setBacklight(255);
+  if(!SD.begin()){
+      Serial.println(F("Card Mount Failed"));
+      SD_flag = 0;
+  }
+  else{
+    SD_flag = 1;
+  }
+  lcd.setCursor(0, 0);
+  lcd.print("   EXECUTING");
+  lcd.setCursor(0, 1);
+  lcd.print("   config.exe");
+  SDC_SYSconfig();
+  delay(3000);
+  pinMode(SCT_DET,INPUT);  //Define the pin mode
+  pinMode(YFS401,INPUT);
   WiFi.mode(WIFI_STA);
   if(WiFi.status() != WL_CONNECTED){
+    lcd.clear();
     Serial.print("Attempting in connecting to ");
     Serial.print(ssid);
     lcd.setCursor(0, 0);
@@ -120,16 +146,16 @@ void setup() {
     WiFi.begin(ssid, password); 
     lcd.blink();
     WIFI_CONN_Timeout = millis();  
-    while(WiFi.status() != WL_CONNECTED){
+    while(WiFi.status() != WL_CONNECTED){                   // attempts to connect to the provided SSID and PWD for 60 seconds. Moves ahead after the timeout
       delay(2000);  
       Serial.print(".");
-      if((millis() - WIFI_CONN_Timeout ) > 60000 ){
+      if((millis() - WIFI_CONN_Timeout ) > 60000 ){         // Case definitionfor timeout
         WIFI_flag = 0;
         break;
       }
     } 
     lcd.noBlink();
-    if(WIFI_flag){
+    if(WIFI_flag){                                          // If connected display the details
       Serial.println("\nConnected.");
       Serial.print("IP address: ");
       Serial.println(WiFi.localIP()); 
@@ -149,62 +175,68 @@ void setup() {
     }
   }
   delay(3000);
-  ThingSpeak.begin(client);
-  timeClient.begin();
+  ThingSpeak.begin(client);                                   // Starting thinks speak client
+  timeClient.begin();                                         // Starting the WEB UDP time Client to fetch the time data from web
+  ADS.begin();                                                // initialising the 16 bit ADC
   ADS.setGain(GAIN_TWO);
-  ADS.begin();
 
   PGuage1.begin(HX710_SDI_1, HX710_SCK_1);
   PGuage2.begin(HX710_SDI_2, HX710_SCK_2);
-  AVG_IRMS.begin();
-  AVG_flowRate.begin();
-  AVG_Q.begin();
+  PGuage1.set_offset(0);                                      // Setting tare offset to 0 for pressure Guage 1
+  PGuage2.set_offset(0);                                      // Setting tare offset to 0 for pressure Guage 2
+  PGuage1.set_scale(419.44f);                                 // Setting scale factor to 419.438 for PG 1
+  PGuage2.set_scale(419.44f);                                 // Setting scale factor to 419.438 for PG 2
 
-  if(!SD.begin()){
-      Serial.println(F("Card Mount Failed"));
-      SD_flag = 1;
-  }
+  AVG_IRMS.begin();                                           // The moving average filter is made to start for SCT sensor
+  AVG_flowRate.begin();                                       // The moving average filter is made to start for YFS sensor
+  AVG_Q.begin();                                              // The moving average filter is made to start for pressur guage
  
   Sensortest();
   LCDDISPLAY();
   xTaskCreatePinnedToCore(LoopA, "Task1", 10000, NULL, 1, &Task1, 0);  // xTCPTC(Task Fn, Task name, Task Params, priority, task handle/constructor, which core)
   delay(500); 
-  // xTaskCreatePinnedToCore(LoopB, "Task2", 10000, NULL, 1, &Task2, 1);  
-  // delay(500); 
-  
   // put your setup code here, to run once:
   delay(3000);
 }
 
 void LoopA( void * pvParameters ){
-  // Serial.print("Task1 running on core ");
-  // Serial.println(xPortGetCoreID());
+  Serial.print("LoopA is running on core ");
+  Serial.println(xPortGetCoreID());
 
   for(;;)
   {
-    if((WiFi.status() != WL_CONNECTED) || (WiFi.status() == WL_CONNECTION_LOST)){
+    if((WiFi.status() != WL_CONNECTED) || (WiFi.status() == WL_CONNECTION_LOST)){         // checks for the event of WiFi disconnection
       WiFi.begin(ssid, password);                            // set for the next iteration
-      Serial.println(F("\n Not Connected... Moving ahead"));
+      if(WIFI_flag){
+        Serial.println(F("\n Not Connected... Moving ahead"));
+      }
       WIFI_flag = 0;
     }
     else{
-      Serial.println(F("\nConnected."));
-      Serial.print(F("IP address: "));
-      Serial.println(WiFi.localIP());
-      WIFI_flag = 1;
-    }
+        if(!WIFI_flag)
+        {
+          Serial.println(F("\nConnected."));
+          Serial.print(F("IP address: "));
+          Serial.println(WiFi.localIP());
+          WIFI_flag = 1;
+        }
+      }
+    
+    if(WIFI_flag){                                                                      // if WiFi is available then push data to thinks speak
+      if((millis() - TS_prev_time)>= TS_update_time){                                   // thinksspeak update is set once every 20s. 15s is the minimum 
+        StageValues();                                                                  // converts the measured value in integer to a valid float
+        Serial.println(F("Push to Thinksspeak"));
 
-    if(WIFI_flag){
-      if((millis() - TS_prev_time)>= TS_update_time){
-        ThingSpeak.setField(1, AVG_ARR[0]);
-        ThingSpeak.setField(2, AVG_ARR[1]);
-        ThingSpeak.setField(3, AVG_ARR[2]);
+        ThingSpeak.setField(1, AVG_ARR_FLOAT[0]);
+        ThingSpeak.setField(2, AVG_ARR_FLOAT[1]);
+        ThingSpeak.setField(3, AVG_ARR_FLOAT[2]);
         ThingSpeak.setField(4, LPG_STAT);
         Tspk_Update(ThingSpeak.writeFields(ChannelNumber, WriteAPIKey));
         TS_prev_time = millis();
         AVG_IRMS.reset();
         AVG_flowRate.reset();
         AVG_Q.reset();
+        Serial.println(F("Thinksspeak Stack push ececuted"));
       }
     }
     else{
@@ -214,26 +246,28 @@ void LoopA( void * pvParameters ){
         SD_flag = 0;
       } 
       else{
-        if((millis() - SDC_prev_time)>= SDC_update_time){
-          SDClogger();
-          AVG_IRMS.reset();
-          AVG_flowRate.reset();
-          AVG_Q.reset();  
+        if((millis() - SDC_prev_time)>= SDC_update_time){                 // Sdcard logging update is set once every 5s
+          StageValues();                                                  // converts the measured value in integer to a valid float
+          SDClogger();                                                    // function to log the measured details to SD card
+          AVG_IRMS.reset();                                               // Flush the existing/running moving average filter for Current
+          AVG_flowRate.reset();                                           // Flush the existing/running moving average filter for water flow
+          AVG_Q.reset();                                                  // Flush the existing/running moving average filter for Pressure difference
           SDC_prev_time = millis();
         }
       }
     }
+    delay(1000);
   } 
 }
 
 void loop() {
-  Serial.print("Task2 running on core ");
-  Serial.println(xPortGetCoreID());
+  // Serial.print("Task running on core ");
+  // Serial.println(xPortGetCoreID());
   time_update();
-  if(digitalRead(SCT_DET)){
-    SCT_flag = 1;
+  Sensortest();
+  if(SCT_flag){
     IRMS = Irms();
-    AVG_ARR[0] = AVG_IRMS.reading(IRMS);
+    AVG_ARR_INT[0] = AVG_IRMS.reading(IRMS*100);
     P = 230.0 * IRMS;
     Serial.print(F("Average RMS Current: "));
     Serial.print(IRMS, 3);
@@ -244,7 +278,6 @@ void loop() {
   }
   else{
     Serial.println(F("SCT disconnected"));
-    SCT_flag = 0;
   } 
   LCDDISPLAY();
 
@@ -257,13 +290,17 @@ void loop() {
   // //flowMilliLitres = (flowRate   / 60) * 2000; //2000 is the total time elapsed in each succesive measurement
   // //totalMilliLitres += flowMilliLitres;
   Serial.println(flowRate);
-  AVG_ARR[1] = AVG_flowRate.reading(flowRate);
+  AVG_ARR_INT[1] = AVG_flowRate.reading(flowRate*100); // multiplyiing 100 to compensate the conversion to int from float
+  Serial.print(F("AVG flow rate:"));
+  Serial.println(AVG_ARR_INT[1]);
   pulseCount = 0;
   flowMilliLitres = (flowRate   / 60) * (millis() - YFSpreviousMillis); //2000 is the total time elapsed in each succesive measurement
   Serial.print(F("flowMilliLitres:"));
   Serial.println(flowMilliLitres);
 
-  MQ = ADS.readADC_SingleEnded(2);
+  MQ = ADS.readADC_SingleEnded(2);  
+  Serial.print(F("RAW LPG ADC = "));
+  Serial.println(MQ);
   if( MQ >= MQ_LIM){
     Serial.println(F("LPG leak Detected..."));
     LPG_STAT = 1;
@@ -274,18 +311,11 @@ void loop() {
   }
 
   Q = Press_Diff();
-  AVG_ARR[2] = AVG_Q.reading(Q);
+  AVG_ARR_INT[2] = AVG_Q.reading(Q);
   Serial.print(F("LPG Flow rate --> "));
   Serial.println(Q);
   
-
   
-  LCDDISPLAY();
-  delay (1000);
-  LCDDISPLAY();
-  delay (1000);
-  LCDDISPLAY();
-  delay (1000);
   LCDDISPLAY();
   delay (1000);
 }
@@ -293,12 +323,12 @@ void loop() {
 
 
 double Press_Diff(){    // returns the flow rate as 32 bit 
-  PG1_Raw = PGuage1.read_average(5);
-  PG2_Raw = PGuage2.read_average(5);
+  PG1_Raw = PGuage1.get_units(10);
+  PG2_Raw = PGuage2.get_units(10);
   Serial.print(F("change in pressure ==>"));
-  Serial.println((PG1_Raw - PG2_Raw)* ADC_multiplier );
+  Serial.println(PG1_Raw - PG2_Raw);
   //return(Kv * sqrt((PG1_Raw - PG2_Raw)/S));     //Flow rate =Flow factor * (sqrt(pressure difference / Specific Gravity))
-  return(A1*sqrt((2*(PG1_Raw - PG2_Raw)*ADC_multiplier)/(RHO * (sq((A1/A2))-1))));
+  return(A1*sqrt((2*(PG1_Raw - PG2_Raw))/(RHO * (sq((A1/A2))-1))));
 } 
 
 void pulseCounter(){     // ISR for YFS
@@ -402,14 +432,24 @@ void Sensortest(){       // test all connected devices and sets error flags acco
       Serial.println(F("No SD card attached"));
       SD_flag = 0;
   }
+  else{
+    SD_flag = 1;
+  }
   if(!digitalRead(SCT_DET)){
     SCT_flag = 0;
     Serial.println(F("No SCT attached"));
+  }
+  else{
+    SCT_flag = 1;
   }
   if(digitalRead(YFS401)){
     YFS_flag = 0;
     Serial.println(F("No YFS attached"));
   }
+  else{
+    YFS_flag = 1;
+  }
+
   if ((PGuage1.is_ready() != 1) || (PGuage2.is_ready() != 1)){ 
     MassFlow_flag = 0;
     if((PGuage1.is_ready() != 1) && (PGuage2.is_ready() != 1)){
@@ -422,16 +462,29 @@ void Sensortest(){       // test all connected devices and sets error flags acco
       Serial.println(F("HX710B 2 not Found !"));
     }  
   }
+  else{
+    MassFlow_flag = 1;
+  }
   
   Serial.print(F("SCT ->"));
-  Serial.println(SCT_flag );
+  Serial.print(SCT_flag ); 
+  Serial.print(F("     "));
   Serial.print(F("YFS ->"));
-  Serial.println(YFS_flag );
+  Serial.print(YFS_flag );
+  Serial.print(F("     "));
   Serial.print(F("SDC ->"));
-  Serial.println(SD_flag); 
+  Serial.print(SD_flag);
+  Serial.print(F("     ")); 
   Serial.print(F("LPG ->"));
   Serial.println(MassFlow_flag); 
 
+}
+
+void StageValues(){
+  for(short i =0 ; i< sizeof(AVG_ARR_INT) / sizeof(AVG_ARR_INT[0]); i++){
+    AVG_ARR_FLOAT[i] = (float) (((float) AVG_ARR_INT[i])/100);
+    // Serial.println(AVG_ARR_FLOAT[i]);
+  }
 }
 
 void Tspk_Update(int STATUS){ //
@@ -493,21 +546,33 @@ void time_update(){
 }
 
 void SDClogger(){
+  String dataMessage;
+  dataMessage.reserve(128);
   File file = SD.open("/data.txt");
     if(!file) {
       Serial.println(F("File doens't exist"));
       Serial.println(F("Creating file..."));
-      writeFile(SD, "/data.txt", "Reading ID, Date, Hour, IRMS, Water, Mass Flow, SCT, YFS, Gauge \r\n");
+      writeFile(SD, "/data.txt", "| Reading ID |    Date    |   Time   |  IRMS  |  Water  |  Mass Flow  |  SCT  |  YFS  |  Gauge  |  LPG LEAK |\r\n");
     }
     else {
       Serial.println(F("File already exists"));
-      dataMessage = String(readingID) + "," + String(Date) + "," + String(Time) + "," + String(IRMS) + "," + String(flowRate) + "," + String(Q) + "," + String(SCT_flag) + "," + String(YFS_flag) + "," + String(MassFlow_flag) + "\r\n";
+      // dataMessage = "|     " + String(readingID) + "     | " + String(Date).substring(5) + " | " + String(Time).substring(5) + " |  " + String(IRMS) + "  |  " + String(flowRate) + "   |     " + String(Q) + "  |     " + String(SCT_flag) + "   |   " + String(YFS_flag) + "   |    " + String(MassFlow_flag) + "    |     " + String(LPG_STAT) + "     |" +"\r\n";
+      dataMessage = "|     " + String(readingID) + "     | " + String(Date).substring(5) + " | " + String(Time).substring(5) + " |  " + String(AVG_ARR_FLOAT[0]) + "  |  " + String(AVG_ARR_FLOAT[1]) + "   |     " + String(AVG_ARR_FLOAT[2]) + "  |     " + String(SCT_flag) + "   |   " + String(YFS_flag) + "   |    " + String(MassFlow_flag) + "    |     " + String(LPG_STAT) + "     |" +"\r\n";
       Serial.print(F("Save data: "));
       Serial.println(dataMessage);
       appendFile(SD, "/data.txt", dataMessage.c_str());  
       readingID++;
     }
     file.close();
+}
+
+void SDC_SYSconfig(){
+  Serial.println("SYS_Config.exe initiated");
+  if(SD_flag){
+  ReadSet(SD, "/config.txt");
+  Serial.println("SYS_Config.exe Completed execution");
+  }
+  
 }
 
 void writeFile(fs::FS &fs, const char * path, const char * message){
@@ -541,3 +606,111 @@ void appendFile(fs::FS &fs, const char * path, const char * message){
     }
     file.close();
 }
+
+void ReadSet(fs::FS &fs, const char * path){
+  File file = fs.open(path);
+  static char Databuff[256];            // This buffer stores a single line with a maximum of 255 chars
+  int index = 0;
+  bool RD_Begin = 0;
+  short lines = 0;
+  if(file){
+    short len = file.size();
+    int next = 0;
+    while ((next = file.read()) != -1)
+    {
+      char nextChar = (char) next;
+      if (nextChar == '\n')
+      {
+        Databuff[index] = '\0';
+        // if(Databuff[0] == '*' && Databuff[1] == '*' && Databuff[2] == '*'){   // condition to begin a valid read in the text file ie lines between  *** .... ***
+        //   if(!RD_Begin){
+        //     RD_Begin = 1;
+        //   }
+        //   else{
+        //     RD_Begin = 0;
+        //   }
+        // }
+        // if(RD_Begin){
+          
+        Paramupdate(Databuff, index);
+        index = 0;
+        // }
+        
+        lines += 1;
+      }
+      else
+      {
+        Databuff[index] = nextChar;
+        index += 1;
+      }
+    }
+    
+    Serial.print("Succefully Read ");
+    Serial.println(lines);
+    Serial.print(" Lines, and Parameters are updated");
+    file.close();
+      
+  } 
+  else {
+    Serial.println("Failed to open file for reading");
+  }
+}
+
+void Paramupdate(char *buff, short length){
+  // char arr_hold[length];
+  String bufferstr = "";                            // this string holds the incoming single line data with the help of string concatation 
+  bufferstr.reserve(length + 1);                    // assigning memory space for the read line data 
+  for(short i=0; i<=length; i++){
+    // bufferstr = bufferstr + buff[i];
+    bufferstr.concat(buff[i]);
+  }
+  String Parameter = "";                            // This string holds the parameter to be updated
+  String Value = "";                                // This string holds the Value of the parameter to be updated
+  if(bufferstr.startsWith("`")){                    // Valid line Qualifier ie valid line starts with ` 
+    Parameter.concat(bufferstr.substring(1,bufferstr.indexOf('=')));
+    Value.concat(bufferstr.substring(bufferstr.indexOf('"')+1,bufferstr.lastIndexOf('"')));
+
+    if(Parameter.substring(0,Parameter.length()-1) == "ssid"){              // check which parameter to be updated
+      SD_CONFIG_SSID.reserve(Value.length()+1);                             // Assign memory for the blank string
+      SD_CONFIG_SSID.concat(Value.substring(0,Value.length()));             // Concat the data to the blank string
+      ssid = SD_CONFIG_SSID.c_str();                                        // generate string pointer 
+      Serial.println("Updated ssid");
+    }
+    else if(Parameter.substring(0,Parameter.length()-1) == "password"){
+      SD_CONFIG_PWD.reserve(Value.length()+1);
+      SD_CONFIG_PWD.concat(Value.substring(0,Value.length()));
+      password = SD_CONFIG_PWD.c_str();
+      Serial.println("Updated PWD");
+    }
+    else if(Parameter.substring(0,Parameter.length()-1) == "ChannelNumber"){
+      SD_CONFIG_TSPKCHNUM.reserve(Value.length()+1);
+      SD_CONFIG_TSPKCHNUM.concat(Value.substring(0,Value.length()));
+      ChannelNumber = atol(SD_CONFIG_TSPKCHNUM.c_str());                    // String to long conversion is made via atol() since the channel name data type is long  
+      Serial.println("Updated CHN THSPK");
+    }
+    else if(Parameter.substring(0,Parameter.length()-1) == "WriteAPIKey"){
+      SD_CONFIG_WAPI.reserve(Value.length()+1);
+      SD_CONFIG_WAPI.concat(Value.substring(0,Value.length()));
+      WriteAPIKey = SD_CONFIG_WAPI.c_str();
+      Serial.println("Updated WAPI");
+    }
+    else if(Parameter.substring(0,Parameter.length()-1) == "readAPIKey"){
+      SD_CONFIG_RAPI.reserve(Value.length()+1);
+      SD_CONFIG_RAPI.concat(Value.substring(0,Value.length()));
+      readAPIKey = SD_CONFIG_RAPI.c_str();
+      Serial.println("Updated RAPI");
+    }
+    else{                                                                 // exception for the update if any
+      Serial.print("Parameter \" ");
+      Serial.print(Parameter);
+      Serial.println(" \" is out of bound");
+    }
+
+
+  }
+  else{
+    Serial.println("Invalid line");
+  }
+  
+} 
+
