@@ -33,7 +33,7 @@ const char* mqtt_server = "192.168.0.8";  // IP of the MQTT broker
 const char* PWR_topic = "Node1/measurement/IRMS";
 const char* Water_topic = "Node1/measurement/Water";
 const char* LPG_topic = "Node1/measurement/LPG";
-const char* LPG_LEAK = "home/Status/LPG_Leak";
+const char* LPG_LEAK = "Node1/Status/LPG_Leak";
 const char* mqtt_username = "BR_UTILITY"; // MQTT username
 const char* mqtt_password = "UTILITYPASS"; // MQTT password
 const char* clientID = "client_livingroom"; // MQTT client ID
@@ -215,9 +215,9 @@ void setup() {
   PGuage1.set_scale(419.44f);                                 // Setting scale factor to 419.438 for PG 1
   PGuage2.set_scale(419.44f);                                 // Setting scale factor to 419.438 for PG 2
 
-  AVG_IRMS.begin();                                           // The moving average filter is made to start for SCT sensor
-  AVG_flowRate.begin();                                       // The moving average filter is made to start for YFS sensor
-  AVG_Q.begin();                                              // The moving average filter is made to start for pressur guage
+  AVG_IRMS.begin();                                         
+  AVG_flowRate.begin();                                      
+  AVG_Q.begin();                                            
  
   Sensortest();
   LCDDISPLAY();
@@ -315,8 +315,6 @@ void loop() {
   delay(1000);
   detachInterrupt(digitalPinToInterrupt(YFS401));
   flowRate = ((1000.0 / (millis() - YFSpreviousMillis)) * pulseCount) / calibrationFactor;
-  // //flowMilliLitres = (flowRate   / 60) * 2000; //2000 is the total time elapsed in each succesive measurement
-  // //totalMilliLitres += flowMilliLitres;
   Serial.println(flowRate);
   AVG_ARR_INT[1] = AVG_flowRate.reading(flowRate*100); // multiplyiing 100 to compensate the conversion to int from float
   Serial.print(F("AVG flow rate:"));
@@ -383,10 +381,6 @@ float Irms(){            // ISR for SCT100 returns IRMS a float
 }
 
 void LCDDISPLAY(){       // displays info @ lcd only when called and a defined time has elapsed. It cycles through diffrent datasets.
-  // SD_flag = 0;
-  // SCT_flag = 0;
-  // YFS_flag = 0;
-  // MassFlow_flag = 0;
   if(millis()-lcdpreviousMillis >= lcddelay){
     lcdsweep();
     switch(lcdstate){
@@ -637,7 +631,7 @@ void appendFile(fs::FS &fs, const char * path, const char * message){
 
 void ReadSet(fs::FS &fs, const char * path){
   File file = fs.open(path);
-  static char Databuff[256];            // This buffer stores a single line with a maximum of 255 chars
+  static char Databuff[256];   
   int index = 0;
   bool RD_Begin = 0;
   short lines = 0;
@@ -650,20 +644,8 @@ void ReadSet(fs::FS &fs, const char * path){
       if (nextChar == '\n')
       {
         Databuff[index] = '\0';
-        // if(Databuff[0] == '*' && Databuff[1] == '*' && Databuff[2] == '*'){   // condition to begin a valid read in the text file ie lines between  *** .... ***
-        //   if(!RD_Begin){
-        //     RD_Begin = 1;
-        //   }
-        //   else{
-        //     RD_Begin = 0;
-        //   }
-        // }
-        // if(RD_Begin){
-          
         Paramupdate(Databuff, index);
         index = 0;
-        // }
-        
         lines += 1;
       }
       else
@@ -686,22 +668,22 @@ void ReadSet(fs::FS &fs, const char * path){
 
 void Paramupdate(char *buff, short length){
   // char arr_hold[length];
-  String bufferstr = "";                            // this string holds the incoming single line data with the help of string concatation 
-  bufferstr.reserve(length + 1);                    // assigning memory space for the read line data 
+  String bufferstr = "";                           n 
+  bufferstr.reserve(length + 1);                     
   for(short i=0; i<=length; i++){
     // bufferstr = bufferstr + buff[i];
     bufferstr.concat(buff[i]);
   }
-  String Parameter = "";                            // This string holds the parameter to be updated
-  String Value = "";                                // This string holds the Value of the parameter to be updated
-  if(bufferstr.startsWith("`")){                    // Valid line Qualifier ie valid line starts with ` 
+  String Parameter = "";                            
+  String Value = "";                                
+  if(bufferstr.startsWith("`")){                   
     Parameter.concat(bufferstr.substring(1,bufferstr.indexOf('=')));
     Value.concat(bufferstr.substring(bufferstr.indexOf('"')+1,bufferstr.lastIndexOf('"')));
 
-    if(Parameter.substring(0,Parameter.length()-1) == "ssid"){              // check which parameter to be updated
-      SD_CONFIG_SSID.reserve(Value.length()+1);                             // Assign memory for the blank string
-      SD_CONFIG_SSID.concat(Value.substring(0,Value.length()));             // Concat the data to the blank string
-      ssid = SD_CONFIG_SSID.c_str();                                        // generate string pointer 
+    if(Parameter.substring(0,Parameter.length()-1) == "ssid"){              
+      SD_CONFIG_SSID.reserve(Value.length()+1);                             
+      SD_CONFIG_SSID.concat(Value.substring(0,Value.length()));           
+      ssid = SD_CONFIG_SSID.c_str();                                       
       Serial.println("Updated ssid");
     }
     else if(Parameter.substring(0,Parameter.length()-1) == "password"){
@@ -713,7 +695,7 @@ void Paramupdate(char *buff, short length){
     else if(Parameter.substring(0,Parameter.length()-1) == "ChannelNumber"){
       SD_CONFIG_TSPKCHNUM.reserve(Value.length()+1);
       SD_CONFIG_TSPKCHNUM.concat(Value.substring(0,Value.length()));
-      ChannelNumber = atol(SD_CONFIG_TSPKCHNUM.c_str());                    // String to long conversion is made via atol() since the channel name data type is long  
+      ChannelNumber = atol(SD_CONFIG_TSPKCHNUM.c_str());                     
       Serial.println("Updated CHN THSPK");
     }
     else if(Parameter.substring(0,Parameter.length()-1) == "WriteAPIKey"){
@@ -753,9 +735,9 @@ void Paramupdate(char *buff, short length){
       Serial.println("Updated LPG Flow topic");
     }
     else if(Parameter.substring(0,Parameter.length()-1) == "Topic_LPG_Leak"){
-      SD_CONFIG_LPG_LEAK.reserve(Value.length()+1);
-      SD_CONFIG_LPG_LEAK.concat(Value.substring(0,Value.length()));
-      LPG_LEAK = SD_CONFIG_LPG_LEAK.c_str();
+      SD_CONFIG_TOPIC_LPG_LEAK.reserve(Value.length()+1);
+      SD_CONFIG_TOPIC_LPG_LEAK.concat(Value.substring(0,Value.length()));
+      LPG_LEAK = SD_CONFIG_TOPIC_LPG_LEAK.c_str();
       Serial.println("Updated Leak Status Topic");
     }
     else if(Parameter.substring(0,Parameter.length()-1) == "MQTT_USRNM"){
@@ -767,27 +749,24 @@ void Paramupdate(char *buff, short length){
     else if(Parameter.substring(0,Parameter.length()-1) == "MQTT_PASS"){
       SD_CONFIG_MQTT_PWD.reserve(Value.length()+1);
       SD_CONFIG_MQTT_PWD.concat(Value.substring(0,Value.length()));
-      mqtt_passwordy = SD_CONFIG_MQTT_PWD.c_str();
+      mqtt_password = SD_CONFIG_MQTT_PWD.c_str();
       Serial.println("Updated MQTT Password");
     }
     else if(Parameter.substring(0,Parameter.length()-1) == "MQTT_Client_ID"){
-          SD_CONFIG_CLIENT_ID.reserve(Value.length()+1);
-          SD_CONFIG_CLIENT_ID.concat(Value.substring(0,Value.length()));
-          clientID = SD_CONFIG_CLIENT_ID.c_str();
-          Serial.println("Updated CLIENT_ID");
-        }
+      SD_CONFIG_CLIENT_ID.reserve(Value.length()+1);
+      SD_CONFIG_CLIENT_ID.concat(Value.substring(0,Value.length()));
+      clientID = SD_CONFIG_CLIENT_ID.c_str();
+      Serial.println("Updated CLIENT_ID");
+    }
     else{                                                                 // exception for the update if any
       Serial.print("Parameter \" ");
       Serial.print(Parameter);
       Serial.println(" \" is out of bound");
     }
-
-
   }
   else{
     Serial.println("Invalid line");
   }
-  
 } 
 
 
@@ -806,15 +785,10 @@ void callback(char* topic, byte* message, unsigned int length) {
   }
   Serial.println();
 
-  // Feel free to add more if statements to control more GPIOs with MQTT
-
-  // If a message is received on the topic esp32/output, you check if the message is either "on" or "off". 
-  // Changes the output state according to the message
   if (String(topic) == "esp32/output") {
     Serial.print("Changing output to ");
     if(messageTemp == "on"){
       Serial.println("on");
-      // digitalWrite(ledPin, HIGH);
     }
     else if(messageTemp == "off"){
       Serial.println("off");
@@ -827,16 +801,13 @@ void reconnect() {
   // Loop until we're reconnected
   while (!MQTTclient.connected()) {
     Serial.print("Attempting MQTT connection...");
-    // Attempt to connect
     if (MQTTclient.connect("ESP8266Client")) {
       Serial.println("connected");
-      // Subscribe
       MQTTclient.subscribe("esp32/output");
     } else {
       Serial.print("failed, rc=");
       Serial.print(MQTTclient.state());
       Serial.println(" try again in 5 seconds");
-      // Wait 5 seconds before retrying
       delay(5000);
     }
   }
