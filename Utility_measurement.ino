@@ -1,4 +1,5 @@
 #include <WiFi.h>
+#include <PubSubClient.h>
 #include "ThingSpeak.h"
 #include <WiFiUdp.h>
 #include <NTPClient.h>               
@@ -12,6 +13,11 @@
 #include "SPI.h"
 #include "HX711.h"
 // #include "HX710B.h"
+extern "C" {
+  #include "freertos/FreeRTOS.h"
+  #include "freertos/timers.h"
+}
+#include <AsyncMqttClient.h>
 
 #define HX710_SCK_1 25
 #define HX710_SDI_1 26
@@ -22,6 +28,16 @@
 
 const char* ssid = "Alvin";               // your network SSID (name) 
 const char* password = "0568098725";          // your network password
+
+const char* mqtt_server = "192.168.0.8";  // IP of the MQTT broker
+const char* PWR_topic = "Node1/measurement/IRMS";
+const char* Water_topic = "Node1/measurement/Water";
+const char* LPG_topic = "Node1/measurement/LPG";
+const char* LPG_LEAK = "home/Status/LPG_Leak";
+const char* mqtt_username = "BR_UTILITY"; // MQTT username
+const char* mqtt_password = "UTILITYPASS"; // MQTT password
+const char* clientID = "client_livingroom"; // MQTT client ID
+
 
 const float FACTOR = 50;
 const float multiplier = 0.0825F;             //0.2527F;//0.0625F
@@ -55,12 +71,19 @@ const unsigned long MQ_LIM = 20000;
 unsigned long SDC_prev_time = 0;
 unsigned short SDC_update_time = 5000;
 unsigned int readingID = 0;
-// String dataMessage;
 String SD_CONFIG_SSID = "";
 String SD_CONFIG_PWD = "";
 String SD_CONFIG_TSPKCHNUM = "";
 String SD_CONFIG_WAPI = "";
 String SD_CONFIG_RAPI = "";
+String SD_CONFIG_MQTT_SERVER = "";  // IP of the MQTT broker
+String SD_CONFIG_TOPIC_PWR = "";
+String SD_CONFIG_TOPIC_WATER = "";
+String SD_CONFIG_TOPIC_LPG = "";
+String SD_CONFIG_TOPIC_LPG_LEAK = "";
+String SD_CONFIG_MQTT_USR = ""; // MQTT username
+String SD_CONFIG_MQTT_PWD = ""; // MQTT password
+String SD_CONFIG_CLIENT_ID = ""; // MQTT client ID
 bool SD_flag = 1;
 static char charbuff[512];
 
@@ -112,6 +135,9 @@ Adafruit_ADS1115 ADS;
 HX711 PGuage1;
 HX711 PGuage2;
 NTPClient timeClient(ntpUDP, "asia.pool.ntp.org", 19800, 60000);
+
+WiFiClient wifiClient;            // Initialise the WiFi and MQTT Client objects
+PubSubClient MQTTclient(mqtt_server, 1883, wifiClient); // 1883 is the listener port for the Broker
 
 
 void setup() {
@@ -174,6 +200,8 @@ void setup() {
       lcd.print("time-out");
     }
   }
+  MQTTclient.setServer(mqtt_server, 1883);
+  MQTTclient.setCallback(callback);
   delay(3000);
   ThingSpeak.begin(client);                                   // Starting thinks speak client
   timeClient.begin();                                         // Starting the WEB UDP time Client to fetch the time data from web
@@ -700,6 +728,54 @@ void Paramupdate(char *buff, short length){
       readAPIKey = SD_CONFIG_RAPI.c_str();
       Serial.println("Updated RAPI");
     }
+    else if(Parameter.substring(0,Parameter.length()-1) == "MQTT_Server"){
+      SD_CONFIG_MQTT_SERVER.reserve(Value.length()+1);
+      SD_CONFIG_MQTT_SERVER.concat(Value.substring(0,Value.length()));
+      mqtt_server = SD_CONFIG_MQTT_SERVER.c_str();
+      Serial.println("MQTT_SERVER Address");
+    }
+    else if(Parameter.substring(0,Parameter.length()-1) == "Topic_PWR"){
+      SD_CONFIG_TOPIC_PWR.reserve(Value.length()+1);
+      SD_CONFIG_TOPIC_PWR.concat(Value.substring(0,Value.length()));
+      PWR_topic = SD_CONFIG_TOPIC_PWR.c_str();
+      Serial.println("Updated Power usage topic");
+    }
+    else if(Parameter.substring(0,Parameter.length()-1) == "Topic_Water"){
+      SD_CONFIG_TOPIC_WATER.reserve(Value.length()+1);
+      SD_CONFIG_TOPIC_WATER.concat(Value.substring(0,Value.length()));
+      Water_topic = SD_CONFIG_TOPIC_WATER.c_str();
+      Serial.println("Updated Water flow toipc");
+    }
+    else if(Parameter.substring(0,Parameter.length()-1) == "Topic_LPG"){
+      SD_CONFIG_TOPIC_LPG.reserve(Value.length()+1);
+      SD_CONFIG_TOPIC_LPG.concat(Value.substring(0,Value.length()));
+      LPG_topic = SD_CONFIG_TOPIC_LPG.c_str();
+      Serial.println("Updated LPG Flow topic");
+    }
+    else if(Parameter.substring(0,Parameter.length()-1) == "Topic_LPG_Leak"){
+      SD_CONFIG_LPG_LEAK.reserve(Value.length()+1);
+      SD_CONFIG_LPG_LEAK.concat(Value.substring(0,Value.length()));
+      LPG_LEAK = SD_CONFIG_LPG_LEAK.c_str();
+      Serial.println("Updated Leak Status Topic");
+    }
+    else if(Parameter.substring(0,Parameter.length()-1) == "MQTT_USRNM"){
+      SD_CONFIG_MQTT_USR.reserve(Value.length()+1);
+      SD_CONFIG_MQTT_USR.concat(Value.substring(0,Value.length()));
+      mqtt_username = SD_CONFIG_MQTT_USR.c_str();
+      Serial.println("Updated MQTT User Name");
+    }
+    else if(Parameter.substring(0,Parameter.length()-1) == "MQTT_PASS"){
+      SD_CONFIG_MQTT_PWD.reserve(Value.length()+1);
+      SD_CONFIG_MQTT_PWD.concat(Value.substring(0,Value.length()));
+      mqtt_passwordy = SD_CONFIG_MQTT_PWD.c_str();
+      Serial.println("Updated MQTT Password");
+    }
+    else if(Parameter.substring(0,Parameter.length()-1) == "MQTT_Client_ID"){
+          SD_CONFIG_CLIENT_ID.reserve(Value.length()+1);
+          SD_CONFIG_CLIENT_ID.concat(Value.substring(0,Value.length()));
+          clientID = SD_CONFIG_CLIENT_ID.c_str();
+          Serial.println("Updated CLIENT_ID");
+        }
     else{                                                                 // exception for the update if any
       Serial.print("Parameter \" ");
       Serial.print(Parameter);
@@ -713,4 +789,56 @@ void Paramupdate(char *buff, short length){
   }
   
 } 
+
+
+
+
+
+void callback(char* topic, byte* message, unsigned int length) {
+  Serial.print("Message arrived on topic: ");
+  Serial.print(topic);
+  Serial.print(". Message: ");
+  String messageTemp;
+  
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)message[i]);
+    messageTemp += (char)message[i];
+  }
+  Serial.println();
+
+  // Feel free to add more if statements to control more GPIOs with MQTT
+
+  // If a message is received on the topic esp32/output, you check if the message is either "on" or "off". 
+  // Changes the output state according to the message
+  if (String(topic) == "esp32/output") {
+    Serial.print("Changing output to ");
+    if(messageTemp == "on"){
+      Serial.println("on");
+      // digitalWrite(ledPin, HIGH);
+    }
+    else if(messageTemp == "off"){
+      Serial.println("off");
+      // digitalWrite(ledPin, LOW);
+    }
+  }
+}
+
+void reconnect() {
+  // Loop until we're reconnected
+  while (!MQTTclient.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Attempt to connect
+    if (MQTTclient.connect("ESP8266Client")) {
+      Serial.println("connected");
+      // Subscribe
+      MQTTclient.subscribe("esp32/output");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(MQTTclient.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
 
